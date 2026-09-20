@@ -1,0 +1,36 @@
+# ============================================================
+# 工业视觉缺陷检测与异常定位系统 —— 依赖清单
+# 锁定日期：2026-09-20，依据 anomalib v2.6.2 官方 pyproject.toml
+# ------------------------------------------------------------
+# 重要：anomalib 2.x 把 torch / torchvision 放在“可选依赖组”中，
+#       必须先按环境安装对应 extra（会自动装好匹配版本的 torch）：
+#
+#   服务器 GPU（CUDA 12.6 路线；torch>=2.6.0 / torchvision>=0.21.0）：
+#       pip install "anomalib[cu126]==2.6.2"
+#
+#   本地 CPU（Windows，无 GPU，仅做语法检查与轻量测试）：
+#       pip install "anomalib[cpu]==2.6.2"
+#
+# 完成上面一步后，再执行：
+#       pip install -r requirements.txt
+# ============================================================
+
+# ---- 核心框架（本体；torch / torchvision / lightning / timm 由上面的 extra 提供，勿在此重复指定）----
+anomalib==2.6.2
+
+# ---- 配置与工具 ----
+pyyaml>=6.0
+tqdm>=4.66
+seaborn>=0.13        # 实验对比图表
+
+# ---- Demo（第五阶段 Streamlit）----
+streamlit>=1.40
+
+# ---- 可选加分项（需要时再取消注释）----
+# fastapi>=0.115
+# uvicorn[standard]>=0.30
+# python-multipart>=0.0.9
+
+# ---- 开发 / 轻量测试 ----
+pytest>=8.0
+pytest-cov>=5.0
