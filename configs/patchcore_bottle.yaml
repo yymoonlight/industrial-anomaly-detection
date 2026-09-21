@@ -1,0 +1,44 @@
+# ============================================================
+# 第一阶段 Baseline：PatchCore on MVTec AD / bottle
+# 运行：python -m src.train.train --config configs/patchcore_bottle.yaml
+# ============================================================
+
+experiment:
+  name: patchcore_bottle_baseline
+  seed: 42
+
+data:
+  dataset: mvtec                 # mvtec | folder
+  # 该目录下应直接包含 bottle/、cable/ 等类别子目录
+  # 服务器上若数据放在 /root/autodl-tmp/data，可软链：
+  #   ln -s /root/autodl-tmp/data/mvtec_anomaly_detection data/mvtec_anomaly_detection
+  root: data/mvtec_anomaly_detection
+  category: bottle
+  train_batch_size: 32
+  eval_batch_size: 32
+  num_workers: 4
+
+model:
+  name: patchcore               # patchcore | efficientad
+  backbone: wide_resnet50_2
+  layers: [layer2, layer3]
+  pre_trained: true
+  coreset_sampling_ratio: 0.1   # coreset 子采样比例（第四阶段优化项）
+  num_neighbors: 9
+
+engine:
+  max_epochs: 1                 # PatchCore 只需 1 个 epoch 构建特征库
+  accelerator: auto             # auto | cpu | gpu
+  devices: 1
+  default_root_dir: results
+
+evaluation:
+  metrics:
+    - image_auroc
+    - pixel_auroc
+    - aupro
+    - image_f1
+    - pixel_f1
+  save_heatmaps: true
+  heatmap_count: 20             # 测试集保存热力图的数量
+  predictions_csv: true         # 保存每张测试图的 anomaly score
