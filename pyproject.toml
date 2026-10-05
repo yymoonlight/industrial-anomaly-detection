@@ -10,6 +10,8 @@ select = ["E", "F", "I", "W", "UP"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+# 默认 basetemp 在中文用户目录下会触发权限错误，重定向到项目内英文路径
+addopts = "--basetemp=.test_tmp/pytest"
 markers = [
     "slow: 端到端冒烟测试（CPU 上约 20-30 秒，首次运行需下载预训练权重）",
 ]

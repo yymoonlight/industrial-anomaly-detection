@@ -2,6 +2,8 @@
 
 用法：
     python -m src.evaluation.evaluate --config configs/patchcore_bottle.yaml
+
+批量编排（matrix/ablation）直接调用 run_evaluation(cfg)。
 """
 
 from __future__ import annotations
@@ -24,9 +26,8 @@ from src.utils.config import (
 )
 
 
-def evaluate(config_path: str, ckpt_path: str | None = None) -> dict:
-    """加载权重完成一次完整评估，落盘指标与热力图。"""
-    cfg = load_config(config_path)
+def run_evaluation(cfg: dict, ckpt_path: str | None = None) -> dict:
+    """按配置字典完成一次完整评估，落盘指标与热力图，追加 experiments.csv。"""
     set_seed(cfg["experiment"].get("seed", 42))
     out_dir = experiment_dir(cfg)
 
@@ -48,7 +49,6 @@ def evaluate(config_path: str, ckpt_path: str | None = None) -> dict:
     test_results = engine.test(model=model, datamodule=datamodule, ckpt_path=str(ckpt))
     metrics = test_results[0] if test_results else {}
 
-    # 保存指标 JSON
     with (out_dir / "metrics.json").open("w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2, ensure_ascii=False)
     print(f"[evaluate] 指标: {json.dumps(metrics, indent=2)}")
@@ -65,7 +65,6 @@ def evaluate(config_path: str, ckpt_path: str | None = None) -> dict:
             save_csv=eval_cfg.get("predictions_csv", True),
         )
 
-    # 追加到 results/experiments.csv
     row = {
         "experiment": cfg["experiment"]["name"],
         "model": cfg["model"]["name"],
@@ -84,6 +83,12 @@ def evaluate(config_path: str, ckpt_path: str | None = None) -> dict:
     append_experiment_row(PROJECT_ROOT / "results" / "experiments.csv", row)
     print("[evaluate] 已追加到 results/experiments.csv")
     return metrics
+
+
+def evaluate(config_path: str, ckpt_path: str | None = None) -> dict:
+    """从配置文件加载并评估。"""
+    cfg = load_config(config_path)
+    return run_evaluation(cfg, ckpt_path)
 
 
 def main() -> None:

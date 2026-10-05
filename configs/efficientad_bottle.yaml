@@ -1,0 +1,36 @@
+# ============================================================
+# EfficientAD 单类别模板（bottle），便于单独调试/运行
+# 运行：python -m src.train.train --config configs/efficientad_bottle.yaml
+# ============================================================
+
+experiment:
+  name: efficientad_bottle
+  seed: 42
+
+data:
+  dataset: mvtec
+  root: data/mvtec_anomaly_detection
+  category: bottle
+  train_batch_size: 1       # 论文设置
+  eval_batch_size: 32
+  num_workers: 8
+
+model:
+  name: efficientad
+  model_size: s
+  imagenet_dir: data/imagenette
+  teacher_out_channels: 384
+  lr: 0.0001
+  weight_decay: 0.00001
+
+engine:
+  max_epochs: 100
+  accelerator: auto
+  devices: 1
+  default_root_dir: results
+
+evaluation:
+  metrics: [image_auroc, pixel_auroc, aupro, image_f1, pixel_f1]
+  save_heatmaps: true
+  heatmap_count: 20
+  predictions_csv: true
