@@ -51,7 +51,7 @@ def discover_models(results_dir: str) -> list[tuple[str, str, str]]:
 
 def colorize_heatmap(heatmap: np.ndarray) -> np.ndarray:
     """把单通道异常分数归一化并映射为 JET 伪彩图。"""
-    normalized = (heatmap - heatmap.min()) / (heatmap.ptp() + 1e-8)
+    normalized = (heatmap - heatmap.min()) / (np.ptp(heatmap) + 1e-8)
     colored = cv2.applyColorMap((normalized * 255).astype(np.uint8), cv2.COLORMAP_JET)
     return cv2.cvtColor(colored, cv2.COLOR_BGR2RGB)
 
@@ -96,12 +96,18 @@ with tempfile.TemporaryDirectory() as tmp:
     engine = Engine(default_root_dir=str(runtime), logger=False, accelerator="auto")
 
     with st.spinner("推理中..."):
-        result = engine(data_path=str(image_path), ckpt_path=ckpt_path)
+        predictions = engine.predict(
+            model=model,
+            data_path=str(image_path),
+            ckpt_path=ckpt_path,
+            return_predictions=True,
+        )
+        result = predictions[0]
 
     original = np.array(Image.open(uploaded).convert("RGB"))
-    heatmap = result.anomaly_map.numpy().squeeze()
-    score = float(result.pred_score[0])
-    framework_label = int(result.pred_label[0])
+    heatmap = result.anomaly_map.detach().cpu().numpy().squeeze()
+    score = float(result.pred_score.detach().cpu()[0])
+    framework_label = int(result.pred_label.detach().cpu()[0])
 
     heatmap_color = colorize_heatmap(heatmap)
     heatmap_resized = cv2.resize(heatmap_color, (original.shape[1], original.shape[0]))

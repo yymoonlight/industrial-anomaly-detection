@@ -3,10 +3,11 @@
 # 用法：bash scripts/setup_data_symlink.sh [数据真实路径]
 set -e
 
-SRC=${1:-/root/autodl-tmp/data/mvtec_anomaly_detection}
+# 整包 tar 解压后各类别直接位于该目录下（bottle、cable 等）
+SRC=${1:-/root/autodl-tmp/data}
 
 if [ ! -d "$SRC/bottle" ]; then
-  echo "[警告] 未找到 $SRC/bottle，请确认数据集已解压（该目录下应直接包含 bottle、cable 等 15 个类别目录）"
+  echo "[警告] 未找到 $SRC/bottle，请确认数据集已解压（$SRC 下应直接包含 bottle、cable 等类别目录）"
 fi
 
 mkdir -p data

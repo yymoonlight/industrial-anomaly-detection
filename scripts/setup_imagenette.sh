@@ -10,8 +10,10 @@
 # ============================================================
 set -e
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 DATA_DIR=${1:-/root/autodl-tmp/data}
-PROJECT_DIR=${2:-/root/industrial-anomaly-detection}
+# 默认自动推断为脚本所在项目根（scripts/..），代码放任意目录都适用
+PROJECT_DIR=${2:-$(cd "$SCRIPT_DIR/.." && pwd)}
 
 mkdir -p "$DATA_DIR"
 cd "$DATA_DIR"

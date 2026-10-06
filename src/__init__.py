@@ -27,4 +27,22 @@ if os.name == "nt":
     except UnicodeEncodeError:
         os.environ.setdefault("HF_HOME", str(_PROJECT_ROOT / ".cache" / "huggingface"))
 
+        # 中文用户名会让系统临时目录（如 %LOCALAPPDATA%\Temp）含非 ASCII 字符，
+        # anomalib 校验上传/临时图片路径时会报 "Path contains non-printable characters"。
+        # 把临时目录统一重定向到项目内纯英文路径，并直接覆盖 tempfile.tempdir。
+        import tempfile
+
+        _tmp_root = _PROJECT_ROOT / ".cache" / "tmp"
+        _tmp_root.mkdir(parents=True, exist_ok=True)
+        for _var in ("TMPDIR", "TEMP", "TMP"):
+            os.environ.setdefault(_var, str(_tmp_root))
+        tempfile.tempdir = str(_tmp_root)
+
+    # 兼容：在 Windows 加载 Linux 训练的 checkpoint 时，权重内 pickle 的 PosixPath
+    # 无法在本机实例化（NotImplementedError），临时映射到 WindowsPath。
+    # 这些路径仅用于 checkpoint 内记录，不影响权重加载与推理结果。
+    import pathlib
+
+    pathlib.PosixPath = pathlib.WindowsPath
+
 __version__ = "0.1.0"
