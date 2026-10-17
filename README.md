@@ -1,9 +1,21 @@
 # Industrial Anomaly Detection — 工业视觉缺陷检测与异常定位系统
 
-基于 **MVTec AD** 数据集，使用 **PatchCore** 与 **EfficientAD** 实现工业图像的无监督缺陷检测与像素级异常定位，覆盖「数据处理 → 模型训练/特征库构建 → 多类别实验 → 评估优化 → 阈值工程 → 异常热力图 → 推理脚本 → Streamlit Demo」的完整 AI 工程流程；并附带一份**不依赖框架的手写最小 PatchCore**，用于验证对算法原理的理解。
+基于 **MVTec AD** 数据集，使用 **PatchCore** 与 **EfficientAD** 实现工业图像的无监督缺陷检测与像素级异常定位，覆盖「数据处理 → 模型训练/特征库构建 → 多类别实验 → 评估优化 → 阈值工程 → 异常热力图 → 推理脚本 → Streamlit Demo」的 AI 工程流程；并提供一份**不依赖 Anomalib 的简化 PatchCore**用于实现对照。
 
-> 状态：阶段一~六全部完成。GPU 正式实验（阶段一 bottle baseline、阶段三 7 类×2 模型、阶段四消融与阈值标定、阶段六手写 PatchCore）已在 AutoDL RTX 3080 Ti 上跑完；Streamlit Demo 已在本地 Windows CPU 跑通并验证缺陷/正常样本判定。
+> 状态：已有 AutoDL RTX 3080 Ti 实验记录与权重，包含 7 类×2 模型对比及 bottle 消融。应用层支持本地 CPU、统一推理服务、Streamlit 批次检测和 FastAPI；不需要重新训练已有模型。历史阈值/指标采用测试集复用协议，独立校准与测试验证尚待补充，不能解释为产线泛化保证。最小 PatchCore 有源码与冒烟测试，正式 GPU 成绩未提供可核验记录。
 > 框架：[Anomalib v2.6.2](https://github.com/open-edge-platform/anomalib)（PyTorch / Lightning）
+
+## 应用工程与实现范围
+
+模型主体采用 Anomalib 的 PatchCore/EfficientAD；本项目重点实现模型应用与实验管理：
+
+- **统一推理服务**：CLI、Streamlit、FastAPI 共用图片校验、模型加载、阈值比较与结果结构；默认 CPU，每进程常驻一个模型，相同权重重复调用不重新初始化。
+- **批次检测与复核**：页面支持最多 10 张同类图片、逐图定位、细粒度阈值调节；调整阈值复用已有预测，可下载 CSV、JSON 和定位 PNG。
+- **可追溯输出**：记录检测 ID、时间、模型权重版本、图片 SHA256、实际阈值及来源；明确异常分数与缺陷概率的区别。
+- **接口与输入处理**：提供 `/health`、`/models`、`/predict` 和交互接口文档；拒绝损坏/超限图片，返回明确错误；通过 CPU 合同测试检查并发加载、边界判定和页面复用。
+- **配置化实验**：多模型多类别编排、参数对照、日志/指标/热力图汇总，保留 OOM 等失败记录；性能和阈值结论按实际证据限定范围。
+
+使用步骤、设计取舍和 CPU 验收见 [应用说明](docs/application.md)。模型算法采用已有方法，工程实现与实验观察分别说明。
 
 ## 目录结构
 
@@ -18,8 +30,8 @@ industrial-anomaly-detection/
 │   ├── evaluation/ # 指标（Image/Pixel AUROC、AUPRO、F1）与汇总
 │   ├── inference/  # 批量/单图推理、anomaly score、三联热力图
 │   └── experiments/# 阶段三矩阵对比、阶段四消融/阈值标定/报告生成
-├── app/            # Streamlit Demo
-├── baselines/      # 手写最小 PatchCore（仅 timm + sklearn，讲清原理）
+├── app/            # Streamlit 检测台 + FastAPI（共用 src/inference/service.py）
+├── baselines/      # 简化 PatchCore 对照实现（timm + sklearn 等）
 ├── scripts/        # 服务器运行脚本（各阶段一键脚本、数据/imagenette 准备）
 ├── docs/           # 展示用分析产物：消融报告、experiments.csv、对比 tables/figures、Demo 截图
 ├── results/        # 实验指标、热力图、阈值、权重、日志（不入库）
@@ -45,7 +57,7 @@ industrial-anomaly-detection/
 
 要求 **Python 3.10**（本地 Windows CPU 与远程 GPU 服务器保持一致）。
 
-**本地（Windows，无 GPU，仅开发、静态检查与轻量测试）：**
+**本地（Windows，无 GPU，开发、CPU 推理展示与轻量测试）：**
 
 ```powershell
 conda create -n iad-cpu python=3.10 -y
@@ -104,26 +116,30 @@ bash scripts/run_stage4.sh
 # 报告：精度-速度散点、类别柱状图、coreset/backbone 趋势图、透视表
 python -m src.experiments.report
 
-# 阶段五：Streamlit Demo（上传图 → 原图/热力图/叠加/score/Normal·Defect，可选模型与阈值）
-streamlit run app/streamlit_app.py
+# 本地应用：批次检测、阈值复核与结果导出（默认 CPU）
+python -m streamlit run app/streamlit_app.py --server.address 127.0.0.1
+# API（另一个终端）；文档 http://127.0.0.1:8000/docs
+python -m uvicorn app.api:app --host 127.0.0.1 --port 8000 --log-config configs/logging.yaml
 
-# 阶段六：手写最小 PatchCore（timm 取 layer2/3 特征 → greedy coreset → 1-NN → 上采样）
+# 简化 PatchCore 对照（timm 取 layer2/3 特征 → greedy coreset → 1-NN → 上采样）
 python baselines/minimal_patchcore.py --layout mvtec \
     --root data/mvtec_anomaly_detection/bottle --out results/minimal_bottle
 ```
 
 ## 实验结果速览
 
-完整 25 组实验记录见 [`docs/experiments.csv`](docs/experiments.csv)，对比表格见 [`docs/tables/`](docs/tables/)，消融实验方法论与结论见 [`docs/消融实验说明报告.md`](docs/消融实验说明报告.md)。
+已有 **24 条成功实验记录**，见 [`docs/experiments.csv`](docs/experiments.csv)：1 条初始 baseline、14 条多类别对比、9 条成功消融配置（含消融 baseline，部分 baseline 配置重复）。另有 1 个三层特征配置因 OOM 失败，未计入成功记录。对比表见 [`docs/tables/`](docs/tables/)，历史消融说明见 [`docs/消融实验说明报告.md`](docs/消融实验说明报告.md)，其“省显存提速”等结论需结合下述测量边界阅读。
+
+**评估边界：**当前数据模块沿用 Anomalib 2.6.2 的 `SAME_AS_TEST` 验证设置，后处理标定和测试数据有重用；额外阈值扫描也在测试集上完成。以下是该协议下的实验观察，F1/最优阈值不能当作独立测试成绩。应用改造没有重新训练模型或增加精度实验。
 
 **阶段三（7 类 × PatchCore / EfficientAD）关键对比（metal_nut 为例）：**
 
-| 模型 | Image AUROC | Pixel AUROC | AUPRO | Image F1 | Pixel F1 | 单图耗时 |
+| 模型 | Image AUROC | Pixel AUROC | AUPRO | Image F1 | Pixel F1 | 批量流程均摊耗时 |
 |---|---|---|---|---|---|---|
 | PatchCore (WR50) | 0.9985 | 0.9871 | 0.9423 | 0.9891 | 0.8416 | 141.6 ms |
 | EfficientAD (s) | 0.9853 | 0.9748 | 0.9127 | 0.9674 | 0.8087 | 133.3 ms |
 
-精度-速度权衡散点图：
+计时包含 Engine.predict 内的权重恢复、数据准备/加载和预测，评估 batch size 为 32；不是常驻模型 batch=1 的稳态延迟，FPS 也不能作为部署吞吐保证。未记录 GPU 峰值显存。以下历史图表按该口径展示：
 
 ![精度-速度散点](docs/figures/accuracy_vs_speed.png)
 
@@ -132,10 +148,10 @@ python baselines/minimal_patchcore.py --layout mvtec \
 ![各类别 Image AUROC](docs/figures/image_auroc_by_category.png)
 
 **阶段四消融（bottle，PatchCore）核心结论：**
-- 骨干网络越强，像素级定位越准（WR50 > resnet50 > resnet18），但推理略慢；
-- 简单物体上**仅用 layer2 定位效果最好**（AUPRO 0.9632），三层拼接因显存不足在 12GB 卡上不可行；
-- coreset 采样比例 0.01~0.25 对精度几乎无影响，**0.01 即可把记忆库缩到 1/10、明显省显存提速**；
-- 近邻数 1/3/9 结果一致，本场景取 1 即可。
+- 本次 bottle 单种子对照中，WR50 的像素定位指标高于 resnet50/resnet18；尚未验证跨类别结论。
+- 仅 layer2 的 AUPRO 为 0.9632，高于 layer2+layer3 的 0.9452；三层配置在当时输入尺寸、batch 和实现下于 12GB 卡 OOM。
+- coreset 从 0.1 降至 0.01，Pixel AUROC 0.985663→0.985211，AUPRO 0.945246→0.941845；小幅定位精度损失下减少记忆库条目。完整 checkpoint 约 220.61→107.75 MiB，不能等同为整体显存降低 90%。
+- 近邻数 1/3/9 的汇总指标相同，但逐样本分数不同；该参数主要作用于图像评分重加权，不能据像素指标相同认定检索机制完全不敏感。
 
 backbone 与 coreset 趋势：
 
@@ -143,7 +159,7 @@ backbone 与 coreset 趋势：
 
 ## Streamlit Demo
 
-上传图片后显示原图、异常热力图、叠加定位图、Anomaly Score 与 Normal/Defect 判定；阈值滑块默认取阶段四标定的 best F1 阈值，可现场拖动演示精确率-召回率权衡。
+当前页面支持批次上传、模型选择、原图/热力图/定位、异常数量与 CSV/JSON/PNG 导出。阈值默认沿用 checkpoint，人工调整仅更新 `score > threshold` 判定，不重复模型计算；不自动加载历史测试集 best F1 阈值。分数不是概率，单图热力图颜色表示相对强度。以下为历史单图版本截图：
 
 | 缺陷样本（score 0.503 → Defect） | 正常样本（score 0.499 → Normal） |
 |---|---|
@@ -152,7 +168,7 @@ backbone 与 coreset 趋势：
 本地运行（Windows CPU，推荐 EfficientAD，PatchCore CPU 推理较慢）：
 
 ```powershell
-streamlit run app/streamlit_app.py
+python -m streamlit run app/streamlit_app.py --server.address 127.0.0.1
 ```
 
 ## 测试与静态检查（本地 CPU）
@@ -171,11 +187,16 @@ python -m ruff check .
 - [x] 阶段一：bottle 单类别 PatchCore Baseline（指标 + 热力图 + 日志 + CPU 冒烟）
 - [x] 阶段二：统一入口与配置化封装（train/evaluate/predict + configs）
 - [x] 阶段三：多类别 × PatchCore/EfficientAD 批量对比（7 类×2 模型，精度 / 速度 / FPS）
-- [x] 阶段四：工程消融 + 阈值工程 + 报告图表（backbone/layers/coreset/neighbors，PR 曲线与工作点）
+- [x] 工程消融 + 探索性阈值扫描 + 报告图表（同集扫描，不作为独立校准成果）
 - [x] 阶段五：Streamlit Demo（上传图 → 原图/热力图/score/Normal·Defect，阈值可调）
-- [x] 阶段六：手写最小 PatchCore（验证对算法原理的理解，CPU 冒烟通过）
+- [x] 简化 PatchCore 对照实现与 CPU 冒烟测试入口（正式 GPU 结果未附）
 - [x] AutoDL GPU 正式实验（阶段一 / 三 / 四）
 - [x] README 结果回填与 GitHub 整理
+- [x] 本地 CPU 统一推理服务、模型复用与一致业务判定
+- [x] Streamlit 批次检测、结果导出与模型/图片追溯字段
+- [x] FastAPI 健康检查、模型列表、图片推理与接口合同测试
+- [ ] 独立 calibration/test 协议、冻结阈值后的最终评价
+- [ ] 常驻模型 warmup、多次重复的延迟/吞吐与 GPU 峰值显存测量
 
 ## 参考实现
 

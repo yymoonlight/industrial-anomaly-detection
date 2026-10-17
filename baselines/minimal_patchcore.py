@@ -1,4 +1,4 @@
-"""阶段六：脱离框架的最小 PatchCore 实现（用于验证对算法的真实理解）。
+"""脱离 Anomalib 的简化 PatchCore，实现用于与框架主线对照。
 
 仅依赖 timm（特征提取）、scikit-learn（最近邻）、numpy / opencv：
 1. 预训练 WideResNet50，取 layer2 / layer3 特征，layer2 局部平均池化对齐 layer3 后拼接；

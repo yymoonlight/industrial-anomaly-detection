@@ -18,6 +18,34 @@ from PIL import Image
 from src.utils.config import PROJECT_ROOT
 
 TEST_TMP = PROJECT_ROOT / ".test_tmp"
+TEST_TMP.mkdir(parents=True, exist_ok=True)
+
+
+@pytest.fixture
+def service(tmp_path):
+    """可计数的轻量模型，用于服务/API 合同测试；不反序列化 fixture 权重。"""
+    from src.inference.service import Predictor
+
+    folder = tmp_path / "bottle"
+    folder.mkdir()
+    (folder / "config.yaml").write_text("model:\n  name: efficientad\ndata:\n  category: bottle\n", encoding="utf-8")
+    (folder / "model.ckpt").write_bytes(b"fixture checkpoint, never deserialized")
+    counts = {"loads": 0, "predictions": 0}
+
+    class Backend:
+        version = "test-weights"
+        default_threshold = 0.5
+
+        def predict(self, rgb):
+            counts["predictions"] += 1
+            return 0.5, False, np.zeros(rgb.shape[:2], dtype=np.float32)
+
+    def loader(spec, device):
+        counts["loads"] += 1
+        assert device == "cpu"
+        return Backend()
+
+    return Predictor(tmp_path, loader=loader), counts
 
 
 @pytest.fixture

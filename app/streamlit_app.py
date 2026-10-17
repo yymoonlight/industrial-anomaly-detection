@@ -1,145 +1,114 @@
-"""阶段五：工业视觉缺陷检测 Streamlit Demo。
+"""本地 CPU 检测台；常驻模型、会话内预测复用、批量判定和报告导出。"""
 
-功能：
-- 自动发现 results/ 下已训练好的实验（含 config.yaml 与 .ckpt）并可切换；
-- 上传图片，显示原图、异常热力图、叠加图与 anomaly score；
-- 给出 Normal / Defect 判定，支持阈值滑块（默认读取阶段四标定的 best_f1 阈值）。
-
-运行（在项目根目录）：
-    streamlit run app/streamlit_app.py
-服务器访问：先 bash scripts/run_demo.sh，再用 AutoDL 自定义服务端口（8501）转发。
-"""
-
-# 本脚本需先把项目根加入 sys.path 再 import 业务模块，故豁免 E402
 # ruff: noqa: E402
-
 from __future__ import annotations
 
+import csv
+import hashlib
+import io
 import json
+import os
 import sys
-import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import cv2
-import numpy as np
 import streamlit as st
-from anomalib.engine import Engine
-from PIL import Image
 
-from src.models.factory import build_model
-from src.utils.config import load_config
+from src.inference.service import InvalidImageError, Predictor, image_png, visualization
 
 st.set_page_config(page_title="工业视觉缺陷检测", layout="wide")
 
 
-@st.cache_data(show_spinner=False)
-def discover_models(results_dir: str) -> list[tuple[str, str, str]]:
-    """返回 (实验名, config 路径, ckpt 路径) 列表。"""
-    items = []
-    for config_path in Path(results_dir).rglob("config.yaml"):
-        exp_dir = config_path.parent
-        ckpts = list(exp_dir.rglob("*.ckpt"))
-        if ckpts:
-            ckpt = sorted(ckpts, key=lambda p: p.stat().st_mtime)[-1]
-            items.append((exp_dir.name, str(config_path), str(ckpt)))
-    return sorted(items)
+@st.cache_resource(show_spinner=False)
+def get_predictor(results_dir: str) -> Predictor:
+    return Predictor(results_dir, device="cpu")
 
 
-def colorize_heatmap(heatmap: np.ndarray) -> np.ndarray:
-    """把单通道异常分数归一化并映射为 JET 伪彩图。"""
-    normalized = (heatmap - heatmap.min()) / (np.ptp(heatmap) + 1e-8)
-    colored = cv2.applyColorMap((normalized * 255).astype(np.uint8), cv2.COLORMAP_JET)
-    return cv2.cvtColor(colored, cv2.COLOR_BGR2RGB)
+def main() -> None:
+    st.title("工业视觉缺陷检测与异常定位")
+    st.caption("选择对应产品类别的模型，上传图片，查看定位并导出检测记录。")
+    service = get_predictor(os.environ.get("IAD_RESULTS_DIR", str(ROOT / "results")))
+    catalog = service.catalog()
+    if not catalog:
+        st.info("尚未发现已训练模型。请将已有模型的实验配置和权重放入 results，再刷新页面。")
+        return
+    by_id = {item["model_id"]: item for item in catalog}
+    with st.sidebar:
+        st.header("检测设置")
+        ids = list(by_id)
+        preferred = next((i for i, name in enumerate(ids) if name == "stage3_efficientad_bottle"), 0)
+        choice = st.selectbox("模型实验", ids, index=preferred)
+        info = by_id[choice]
+        st.write(f"产品类别：{info['category']} · 模型：{info['model']}")
+        st.caption("模型仅针对所选类别验证；上传其他类别可能得到不可靠结果。")
+        manual = st.checkbox("手动调整判定阈值", value=False)
+        threshold = st.number_input("阈值", min_value=0.0, max_value=1.0, value=0.5,
+                                    step=0.0001, format="%.4f", disabled=not manual)
+        st.caption("阈值沿用已有模型标定，当前用于演示；独立测试验证待补充。")
+        if st.button("清除本次检测记录"):
+            st.session_state.pop("detections", None)
+    uploads = st.file_uploader("上传同一产品类别的图片（最多 10 张，每张不超过 10 MiB）",
+                               type=["png", "jpg", "jpeg", "bmp", "webp"], accept_multiple_files=True)
+    if len(uploads) > 10:
+        st.warning("请将单次检测控制在 10 张以内。")
+        return
+    if st.button("开始检测", type="primary", disabled=not uploads):
+        detections, failures = [], []
+        # 只保留本次会话的当前批次；改阈值不会再调用模型。
+        for uploaded in uploads:
+            try:
+                with st.spinner(f"正在检测 {uploaded.name}..."):
+                    prediction = service.predict_bytes(choice, uploaded.getvalue())
+                detections.append((uploaded.name, prediction))
+            except InvalidImageError as exc:
+                failures.append(f"{uploaded.name}：{exc}")
+            except Exception:
+                failures.append(f"{uploaded.name}：推理失败，请检查模型与运行日志。")
+        st.session_state["detections"] = {"model_id": choice, "items": detections, "failures": failures,
+                                          "inputs": [hashlib.sha256(u.getvalue()).hexdigest() for u in uploads]}
+    batch = st.session_state.get("detections")
+    current_inputs = [hashlib.sha256(u.getvalue()).hexdigest() for u in uploads]
+    if not batch or batch["model_id"] != choice or batch["inputs"] != current_inputs:
+        st.info("选择图片后点击“开始检测”。切换图片或模型后需重新检测。")
+        return
+    for failure in batch["failures"]:
+        st.warning(failure)
+    items = batch["items"]
+    if not items:
+        return
+    records = [prediction.record(name, threshold if manual else None) for name, prediction in items]
+    a, b, c = st.columns(3)
+    a.metric("已检测", len(records))
+    b.metric("检出异常", sum(r["is_anomaly"] for r in records))
+    c.metric("判为正常", sum(not r["is_anomaly"] for r in records))
+    st.dataframe([{k: r[k] for k in ("filename", "label", "anomaly_score", "threshold", "threshold_source")}
+                  for r in records], hide_index=True, use_container_width=True)
+    st.caption("Anomaly Score 是归一化异常分数，不是缺陷概率。调整阈值只更新判定，无需重新推理。")
+    selected = st.selectbox("查看定位详情", range(len(items)), format_func=lambda i: f"{i + 1}. {items[i][0]}")
+    name, prediction = items[selected]
+    heat, overlay = visualization(prediction.rgb, prediction.anomaly_map)
+    for column, title, image in zip(st.columns(3), ("原图", "相对异常热力图", "叠加定位"),
+                                     (prediction.rgb, heat, overlay)):
+        column.subheader(title)
+        column.image(image, use_container_width=True)
+    st.caption("热力图按当前图片内相对强度着色；正常图也可能出现红色区域，请结合分数与判定。")
+    detail = records[selected]
+    st.write(f"判定：**{detail['label']}** · 分数 {detail['anomaly_score']:.6f} · 阈值 {detail['threshold']:.4f}")
+    st.caption(f"模型版本 {prediction.model_version} · 检测记录 {prediction.prediction_id}")
+    csv_buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(csv_buffer, fieldnames=list(records[0]))
+    writer.writeheader()
+    writer.writerows(records)
+    left, middle, right = st.columns(3)
+    left.download_button("下载批次 CSV", csv_buffer.getvalue().encode("utf-8-sig"),
+                         "detections.csv", "text/csv")
+    middle.download_button("下载检测记录 JSON", json.dumps(records, indent=2, ensure_ascii=False),
+                           "detections.json", "application/json")
+    right.download_button("下载当前定位图", image_png(overlay), "overlay.png", "image/png")
 
 
-def default_threshold(exp_dir: Path) -> float | None:
-    """优先读取阶段四标定的 best_f1 阈值。"""
-    for path in (exp_dir / "threshold" / "threshold.json",
-                 ROOT / "results" / "thresholds" / exp_dir.name / "threshold.json"):
-        if path.is_file():
-            with path.open(encoding="utf-8") as f:
-                return float(json.load(f)["best_f1"]["threshold"])
-    return None
-
-
-st.title("工业视觉缺陷检测与异常定位 Demo")
-st.caption("MVTec AD · PatchCore / EfficientAD · 仅用正常样本训练")
-
-with st.sidebar:
-    st.header("设置")
-    available = discover_models(str(ROOT / "results"))
-    if not available:
-        st.warning("results/ 下未发现已训练模型，请先在服务器完成训练与评估。")
-        st.stop()
-    choice = st.selectbox("选择模型实验", [name for name, _, _ in available], index=0)
-    name, config_path, ckpt_path = next(item for item in available if item[0] == choice)
-    exp_dir = Path(config_path).parent
-
-uploaded = st.file_uploader("上传待检测图片", type=["png", "jpg", "jpeg", "bmp"])
-if uploaded is None:
-    st.info("请上传一张图片开始检测。")
-    st.stop()
-
-# 存到英文临时路径，避免中文路径问题
-with tempfile.TemporaryDirectory() as tmp:
-    image_path = Path(tmp) / "input.png"
-    image_path.write_bytes(uploaded.getvalue())
-
-    cfg = load_config(config_path)
-    model = build_model(cfg)
-    runtime = Path(tempfile.gettempdir()) / "iad_runtime"
-    runtime.mkdir(parents=True, exist_ok=True)
-    engine = Engine(default_root_dir=str(runtime), logger=False, accelerator="auto")
-
-    with st.spinner("推理中..."):
-        predictions = engine.predict(
-            model=model,
-            data_path=str(image_path),
-            ckpt_path=ckpt_path,
-            return_predictions=True,
-        )
-        result = predictions[0]
-
-    original = np.array(Image.open(uploaded).convert("RGB"))
-    heatmap = result.anomaly_map.detach().cpu().numpy().squeeze()
-    score = float(result.pred_score.detach().cpu()[0])
-    framework_label = int(result.pred_label.detach().cpu()[0])
-
-    heatmap_color = colorize_heatmap(heatmap)
-    heatmap_resized = cv2.resize(heatmap_color, (original.shape[1], original.shape[0]))
-    overlay = cv2.addWeighted(original, 0.55, heatmap_resized, 0.45, 0)
-
-    initial = default_threshold(exp_dir)
-    threshold = st.slider(
-        "判定阈值（可调，默认取阶段四标定值）",
-        min_value=0.0,
-        max_value=float(max(score * 1.5, 1.0)),
-        value=float(initial if initial is not None else max(score * 0.5, 0.5)),
-        step=0.01,
-    )
-    is_defect = score >= threshold
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.subheader("原图")
-        st.image(original, use_container_width=True)
-    with col2:
-        st.subheader("异常热力图")
-        st.image(heatmap_resized, use_container_width=True)
-    with col3:
-        st.subheader("叠加定位")
-        st.image(overlay, use_container_width=True)
-
-    st.divider()
-    metric_col, verdict_col = st.columns(2)
-    metric_col.metric("Anomaly Score", f"{score:.4f}")
-    if is_defect:
-        verdict_col.error("判定结果：Defect（检出缺陷）")
-    else:
-        verdict_col.success("判定结果：Normal（正常）")
-    st.caption(f"框架自适应阈值判定：{'Defect' if framework_label else 'Normal'}；"
-               f"当前使用阈值 {threshold:.4f}")
+if __name__ == "__main__":
+    main()

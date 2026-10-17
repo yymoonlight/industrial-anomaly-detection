@@ -65,6 +65,19 @@ outputs/
 上传文件说明.md
 服务器操作指南.md
 Streamlit原理*.md
+简历*.md
+简历*.docx
+fill_resume.py
+
+# ===== 私有学习与准备材料（任意目录）=====
+private/
+interview/
+*面试*
+*复习*
+*简历*
+*自用*
+*学习资料*
+*学习笔记*
 
 # ===== 演示样本（MVTec 原始数据，受 CC BY-NC-SA 许可证限制，不入库）=====
 samples/

@@ -40,3 +40,19 @@ def test_constraint_unreachable_flagged() -> None:
 def test_single_class_raises() -> None:
     with pytest.raises(ValueError):
         calibrate_threshold(np.array([0.1, 0.2]), np.array([0, 0]))
+
+
+def test_threshold_files_are_saved_and_function_returns(tmp_path) -> None:
+    from src.experiments.threshold import fit_experiment_threshold
+
+    predictions = tmp_path / "experiment" / "predictions"
+    predictions.mkdir(parents=True)
+    (predictions / "scores.csv").write_text(
+        "gt_label,pred_score,pred_label\n0,0.1,0\n0,0.2,0\n1,0.8,1\n1,0.9,1\n", encoding="utf-8",
+    )
+    output = tmp_path / "threshold-output"
+    result = fit_experiment_threshold(predictions.parent, out_root=output)
+    assert result["framework_adaptive"]["f1"] == pytest.approx(1.0)
+    assert result["calibration_status"] == "test_exploratory"
+    for filename in ("threshold.json", "threshold_sweep.csv", "pr_curve.png"):
+        assert (output / filename).is_file()

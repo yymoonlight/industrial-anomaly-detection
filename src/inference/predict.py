@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,7 @@ from anomalib.engine import Engine
 
 from src.data.datamodule import build_datamodule
 from src.inference.heatmap import save_triptych
+from src.inference.service import ModelSpec, Predictor
 from src.models.factory import build_model
 from src.utils.config import experiment_dir, find_latest_checkpoint, load_config, resolve_path, set_seed
 
@@ -125,39 +127,41 @@ def predict_single(
     ckpt: str | Path,
     image_path: str | Path,
     output_dir: str | Path,
+    predictor: Predictor | None = None,
+    threshold: float | None = None,
 ) -> dict[str, Any]:
     """对单张图片推理，返回分数、判定并保存三联热力图。"""
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     image_path = resolve_path(image_path)
 
-    model = build_model(cfg)
-    engine = _build_engine(cfg)
-    predictions = engine.predict(
-        model=model,
-        data_path=str(image_path),
-        ckpt_path=str(ckpt),
-        return_predictions=True,
-    )
-
-    batch = predictions[0]
-    score = float(batch.pred_score.detach().cpu()[0].item())
-    pred_label = int(batch.pred_label.detach().cpu()[0].item())
-    anomaly_map = batch.anomaly_map.detach().cpu()[0].numpy()
-    if anomaly_map.ndim == 3:  # 兼容 (1, H, W)
-        anomaly_map = anomaly_map[0]
-    label = "Defect" if pred_label == 1 else "Normal"
+    predictor = predictor or build_predictor(cfg, ckpt)
+    prediction = predictor.predict_bytes(cfg["experiment"]["name"], image_path.read_bytes())
+    record = prediction.record(image_path.name, threshold)
+    score, label = prediction.score, record["label"]
 
     save_triptych(
         image_path,
-        anomaly_map,
-        out_dir / f"{image_path.stem}_{label}.png",
+        prediction.anomaly_map,
+        out_dir / f"{image_path.stem}_{prediction.image_sha256[:10]}_{label}.png",
         score=score,
         label=label,
     )
-    result = {"image_path": str(image_path), "pred_label": pred_label, "label": label, "pred_score": score}
+    result = {**record, "image_path": str(image_path), "pred_label": int(record["is_anomaly"]), "pred_score": score}
+    (out_dir / f"{prediction.prediction_id}.json").write_text(
+        json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8",
+    )
     print(f"[predict] {image_path.name}: score={score:.4f} -> {label}")
     return result
+
+
+def build_predictor(cfg: dict[str, Any], ckpt: str | Path, device: str = "cpu") -> Predictor:
+    """绑定命令行明确指定的配置/权重；目录预测复用同一个实例。"""
+    config_path = Path(cfg["_config_path"]) if cfg.get("_config_path") else experiment_dir(cfg) / "config.yaml"
+    name = cfg["experiment"]["name"]
+    spec = ModelSpec(name, config_path, Path(ckpt), cfg["model"]["name"].lower(),
+                     cfg["data"].get("category", cfg["data"].get("name", "")))
+    return Predictor(config_path.parent, device=device, models={name: spec})
 
 
 def main() -> None:
@@ -166,6 +170,8 @@ def main() -> None:
     parser.add_argument("--ckpt", default=None, help="checkpoint 路径，默认取实验目录下最新权重")
     parser.add_argument("--input", default="test", help="test（测试集）/ 单张图片路径 / 图片目录")
     parser.add_argument("--output", default=None, help="输出目录，默认实验目录下 predictions")
+    parser.add_argument("--threshold", type=float, default=None, help="单图/目录判定阈值，默认沿用 checkpoint")
+    parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu", help="单图/目录推理设备，默认 CPU")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -177,6 +183,8 @@ def main() -> None:
     pred_dir = Path(args.output) if args.output else out_dir / "predictions"
 
     if args.input == "test":
+        if args.threshold is not None:
+            parser.error("--threshold 仅用于单图/目录应用推理；测试集评估沿用原有协议")
         eval_cfg = cfg.get("evaluation", {})
         predict_testset(
             cfg,
@@ -186,14 +194,19 @@ def main() -> None:
             save_csv=eval_cfg.get("predictions_csv", True),
         )
     else:
+        from src.inference.service import validate_threshold
+
+        if args.threshold is not None:
+            validate_threshold(args.threshold)
+        predictor = build_predictor(cfg, ckpt, args.device)
         input_path = resolve_path(args.input)
         if input_path.is_dir():
             exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
             images = sorted(p for p in input_path.rglob("*") if p.suffix.lower() in exts)
             for img in images:
-                predict_single(cfg, ckpt, img, pred_dir)
+                predict_single(cfg, ckpt, img, pred_dir, predictor, args.threshold)
         elif input_path.is_file():
-            predict_single(cfg, ckpt, input_path, pred_dir)
+            predict_single(cfg, ckpt, input_path, pred_dir, predictor, args.threshold)
         else:
             raise FileNotFoundError(f"输入路径不存在: {input_path}")
 

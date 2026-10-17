@@ -142,9 +142,11 @@ def fit_experiment_threshold(
     tp = int(np.sum(pred_arr & (labels_arr == 1)))
     fp = int(np.sum(pred_arr & (labels_arr == 0)))
     fn = int(np.sum((1 - pred_arr) & (labels_arr == 1)))
-    p, r, f = _prf(tp, fp, fn)
-    result["framework_adaptive"] = {"precision": p, "recall": r, "f1": f}
+    p, r, framework_f1 = _prf(tp, fp, fn)
+    result["framework_adaptive"] = {"precision": p, "recall": r, "f1": framework_f1}
     result["experiment"] = exp_dir.name
+    result["calibration_status"] = "test_exploratory"
+    result["comparison"] = ">="
 
     out_dir = out_root or (exp_dir / "threshold")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -161,7 +163,7 @@ def fit_experiment_threshold(
 
     _plot_pr_curve(labels_arr, scores_arr, result, out_dir / "pr_curve.png")
     print(f"[threshold] {exp_dir.name}: best F1={result['best_f1']['f1']:.3f} "
-          f"(框架自适应 F1={f:.3f})，产物见 {out_dir}")
+          f"(框架自适应 F1={framework_f1:.3f})，产物见 {out_dir}")
     return serializable
 
 
